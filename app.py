@@ -2,54 +2,62 @@ import streamlit as st
 from PIL import Image
 import easyocr
 import numpy as np
+import re
 
-st.set_page_config(page_title="運彩自動辨識", layout="centered")
-st.title("🏀 第一節賠率自動抓取")
+st.set_page_config(page_title="運彩多圖辨識版", layout="centered")
+st.title("🏀 運彩多圖自動辨識系統")
 
-# 初始化辨識器 (只需要執行一次)
+# 初始化辨識器
 @st.cache_resource
 def load_reader():
-    return easyocr.Reader(['en']) # 辨識數字與英文
+    return easyocr.Reader(['ch_tra', 'en']) # 支援繁體中文與數字
 
 reader = load_reader()
 
-uploaded_file = st.file_uploader("請上傳運彩截圖", type=["jpg", "png", "jpeg"])
+# 修改處：支援一次上傳多張
+uploaded_files = st.file_uploader("請上傳一張或多張運彩截圖", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
 
-if uploaded_file:
-    img = Image.open(uploaded_file)
-    st.image(img, caption="正在辨識中...", use_container_width=True)
-    
-    # 轉換圖片格式給 EasyOCR 使用
-    img_np = np.array(img)
-    results = reader.readtext(img_np)
-    
-    # 這裡儲存所有抓到的數字
-    all_numbers = []
-    for (bbox, text, prob) in results:
-        # 篩選看起來像賠率的數字 (例如 1.xx)
-        try:
-            val = float(text)
-            if 1.0 < val < 5.0: # 通常賠率在這個區間
-                all_numbers.append(val)
-        except:
-            continue
+if uploaded_files:
+    total_combination_odds = 1.0
+    st.subheader(f"共上傳 {len(uploaded_files)} 張圖片")
+
+    for i, file in enumerate(uploaded_files):
+        img = Image.open(file)
+        st.image(img, caption=f"圖片 {i+1} 辨識中...", width=300)
+        
+        # 影像辨識
+        img_np = np.array(img)
+        results = reader.readtext(img_np)
+        
+        # 精準篩選：找尋符合 1.xx 格式的賠率數字
+        detected_odds = []
+        for (bbox, text, prob) in results:
+            # 清理文字：只留數字和小數點
+            clean_text = re.sub(r'[^0-9.]', '', text)
+            try:
+                val = float(clean_text)
+                # 篩選合理的賠率範圍 (通常 1.2 ~ 4.5 之間較準確)
+                if 1.2 <= val <= 5.0 and len(clean_text) >= 4:
+                    detected_odds.append(val)
+            except:
+                continue
+        
+        # 顯示該張圖的結果
+        if detected_odds:
+            # 取信心水準最高或最像賠率的一個 (通常是第一個)
+            best_odds = detected_odds[0]
+            st.success(f"🖼️ 圖片 {i+1} 偵測到賠率：**{best_odds}**")
+            total_combination_odds *= best_odds
+        else:
+            st.error(f"🖼️ 圖片 {i+1} 無法辨識出有效賠率，請確保數字清晰。")
 
     st.divider()
     
-    if len(all_numbers) >= 2:
-        # 假設抓到的前兩個數字就是你要的
-        odds_a = all_numbers[0]
-        odds_b = all_numbers[1]
+    # 最終總和計算
+    if total_combination_odds > 1.0:
+        final_odds = round(total_combination_odds, 2)
+        st.balloons()
+        st.metric("🔥 串關總賠率", f"{final_odds}")
         
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("偵測賠率 1", f"{odds_a}")
-        with col2:
-            st.metric("偵測賠率 2", f"{odds_b}")
-            
-        total_odds = round(odds_a * odds_b, 2)
-        st.success(f"🔥 自動計算二串一總賠率：{total_odds}")
-        st.write(f"💰 投注 100 元預計回收：{int(100 * total_odds)} 元")
-    else:
-        st.warning("無法自動偵測到足夠的賠率數字，請確保截圖清晰且包含紅圈內的數值。")
-        st.write("偵測到的文字內容：", [res[1] for res in results])
+        bet_amount = st.number_input("輸入下注金額", value=100, step=100)
+        st.info(f"💰 預計回報：{int(bet_amount * final_odds)} 元")
