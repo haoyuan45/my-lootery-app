@@ -1,54 +1,54 @@
-import streamlitimport streamlit as st
+import streamlit as st
 from PIL import Image
 import pytesseract
 import pandas as pd
 import re
 
-st.set_page_config(page_title="運彩賠率表格工具", layout="centered")
+st.set_page_config(page_title="運彩自動整理助手", layout="wide")
 
-st.title("📋 運彩賠率快速整理")
-st.write("上傳截圖後，請『點選』紅圈內的賠率，我會幫你做成表格。")
+st.title("📋 運彩截圖 -> 自動轉表格")
+st.write("請上傳截圖，我會自動提取所有賠率數字並整理。")
 
-uploaded_file = st.file_uploader("📸 上傳運彩截圖", type=["jpg", "png", "jpeg"])
+uploaded_file = st.file_uploader("📸 選擇截圖", type=["jpg", "png", "jpeg"])
 
 if uploaded_file:
+    # 讀取並顯示原始圖片
     img = Image.open(uploaded_file)
-    st.image(img, caption="請對照此圖點選下方數字", use_container_width=True)
+    st.image(img, caption="原始截圖", use_container_width=True)
     
-    with st.spinner('偵測數字中...'):
-        # 抓取所有 1.xx ~ 2.xx 的數字，這會自動排除掉 54.5 或 224.5 這種干擾項
-        custom_config = r'--oem 3 --psm 11 -c tessedit_char_whitelist=0123456789.'
-        raw_text = pytesseract.image_to_string(img, config=custom_config)
+    with st.spinner('正在分析圖片內容...'):
+        # OCR 辨識文字 (含中文與英文數字)
+        text = pytesseract.image_to_string(img, lang='chi_tra+eng')
         
-        # 尋找所有賠率格式的數字
-        all_odds = re.findall(r'[1-2]\.\d{2}', raw_text)
-        # 去除重複並排序，確保選單整齊
-        unique_odds = sorted(list(set(all_odds)), reverse=True)
-
-    if unique_odds:
-        st.info("💡 請點選紅圈內看到的賠率：")
+        # 使用正規表達式抓取賠率 (找 1.xx 到 2.xx 的數字)
+        odds_found = re.findall(r'[1-2]\.\d{2}', text)
         
-        # 讓使用者自己選，絕對不會抓錯行
-        selected = st.multiselect("選擇正確賠率：", unique_odds)
-        
-        if selected:
-            # 將選中的數字做成表格
-            df = pd.DataFrame({
-                "項目": [f"選取項 {i+1}" for i in range(len(selected))],
-                "辨識賠率": selected
+        # 整理成表格格式
+        table_data = []
+        for i in range(0, len(odds_found)):
+            table_data.append({
+                "序號": i + 1,
+                "偵測到的賠率": odds_found[i],
+                "類型": "待確認"
             })
-            
-            st.subheader("📊 整理後的賠率表格")
-            st.table(df)
-            
-            # 如果選了兩個，自動顯示試算的結果（選填）
-            if len(selected) == 2:
-                res = round(float(selected[0]) * float(selected[1]), 2)
-                st.write(f"👉 這兩項組合的參考賠率為：**{res}**")
+
+    if table_data:
+        st.success(f"✅ 成功辨識出 {len(odds_found)} 個賠率數字！")
+        
+        # 轉換成 Pandas 表格
+        df = pd.DataFrame(table_data)
+        
+        # 顯示互動式表格
+        st.subheader("📊 賠率整理結果")
+        st.dataframe(df, use_container_width=True)
+        
+        # 提供下載按鈕
+        csv = df.to_csv(index=False).encode('utf-8-sig')
+        st.download_button("📥 下載此表格 (Excel/CSV)", csv, "odds.csv", "text/csv")
     else:
-        st.error("❌ 找不到賠率數字，請確認截圖清晰。")
-        with st.expander("手動輸入賠率"):
-            manual_input = st.text_input("請手動輸入賠率（用逗號隔開，例如：1.70, 1.68）")
-            if manual_input:
-                m_list = manual_input.split(',')
-                st.table(pd.DataFrame({"項目": [f"手動 {i+1}" for i in range(len(m_list))], "賠率": m_list}))
+        st.error("❌ 找不到賠率數字，請確認截圖是否清晰。")
+        with st.expander("查看辨識到的原始文字"):
+            st.text(text)
+
+st.divider()
+st.info("💡 提示：如果辨識不夠準確，建議截圖時不要包含太多無關內容。")
