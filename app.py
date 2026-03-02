@@ -2,88 +2,45 @@ import streamlit as st
 from PIL import Image
 import pytesseract
 import re
-import pandas as pd
-from datetime import datetime
 
-st.set_page_config(page_title="運彩辨識優化版", layout="wide")
+st.set_page_config(page_title="運彩小助手", layout="centered")
 
-now = datetime.now()
-week_list = ["一", "二", "三", "四", "五", "六", "日"]
-day_of_week = week_list[now.weekday()]
-full_date_display = f"{now.strftime('%Y-%m-%d')} (週{day_of_week})"
+st.title("🏀 運彩截圖自動辨識")
+st.write("請上傳運彩官網或 App 的截圖，我會幫你抓出賠率！")
 
-st.title(f"⚡ 運彩辨識系統 - {full_date_display}")
+uploaded_file = st.file_uploader("📸 選擇截圖", type=["jpg", "png", "jpeg"])
 
-if 'history' not in st.session_state:
-    st.session_state.history = []
-
-with st.sidebar:
-    st.header("📜 歷史紀錄")
-    if st.session_state.history:
-        if st.button("清空紀錄"):
-            st.session_state.history = []
-            st.rerun()
-        st.dataframe(pd.DataFrame(st.session_state.history), hide_index=True)
-
-uploaded_files = st.file_uploader("📸 請上傳截圖", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
-
-if uploaded_files:
-    current_results = []
-
-    for i, file in enumerate(uploaded_files):
-        img = Image.open(file).convert('L') 
-        width, height = img.size
+if uploaded_file:
+    # 顯示上傳的圖片
+    img = Image.open(uploaded_file)
+    st.image(img, caption="已上傳的截圖", use_container_width=True)
+    
+    with st.spinner('正在辨識數字中...'):
+        # 使用 OCR 辨識文字
+        custom_config = r'--oem 3 --psm 6'
+        text = pytesseract.image_to_string(img, config=custom_config)
         
-        with st.spinner(f'分析圖 {i+1} 中...'):
-            # 增加辨識參數，嘗試抓取更細微的文字
-            custom_config = r'--oem 3 --psm 6' 
-            raw_data = pytesseract.image_to_data(img, config=custom_config, output_type=pytesseract.Output.DICT)
+        # 使用正則表達式尋找像 1.65, 1.75 這樣的數字
+        # 這邊會抓出所有小數點兩位的數字
+        odds_found = re.findall(r'\d\.\d{2}', text)
+        
+    if len(odds_found) >= 2:
+        # 假設前兩個抓到的數字就是你要的
+        odds_a = float(odds_found[0])
+        odds_b = float(odds_found[1])
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("辨識賠率 A", f"{odds_a}")
+        with col2:
+            st.metric("辨識賠率 B", f"{odds_b}")
             
-            nums = []
-            for j in range(len(raw_data['text'])):
-                text = raw_data['text'][j].strip()
-                # 只抓含有數字且有小數點的內容
-                clean_text = re.sub(r'[^0-9.]', '', text)
-                if clean_text and "." in clean_text:
-                    try:
-                        val = float(clean_text)
-                        # 排除不合理的超大數字 (例如日期或賠率不會是 100 以上)
-                        if 1.0 < val < 100.0:
-                            x = raw_data['left'][j] + raw_data['width'][j]/2
-                            y = raw_data['top'][j] + raw_data['height'][j]/2
-                            nums.append({'val': clean_text, 'x': x, 'y': y})
-                    except: continue
-
-            # --- 核心邏輯修正 ---
-            # 1. 先把數字分成左右兩群
-            left_group = [n for n in nums if n['x'] < width * 0.5]
-            right_group = [n for n in nums if n['x'] >= width * 0.5]
-            
-            # 2. 排序 (從上到下)
-            left_group.sort(key=lambda n: n['y'])
-            right_group.sort(key=lambda n: n['y'])
-
-            # 3. 過濾掉重複或太接近的座標 (防止同一個數字被抓兩次)
-            def filter_close_nums(sorted_list):
-                unique = []
-                for n in sorted_list:
-                    if not unique or abs(n['y'] - unique[-1]['y']) > 20:
-                        unique.append(n)
-                return unique
-
-            left_final = filter_close_nums(left_group)
-            right_final = filter_close_nums(right_group)
-
-            row = {
-                "時間": now.strftime("%H:%M"),
-                "編號": f"圖{i+1}",
-                "大小-門檻": left_final[0]['val'] if len(left_final) > 0 else "-",
-                "大小-賠率": left_final[1]['val'] if len(left_final) > 1 else "-",
-                "讓分-門檻": right_final[0]['val'] if len(right_final) > 0 else "-",
-                "讓分-賠率": right_final[1]['val'] if len(right_final) > 1 else "-"
-            }
-            current_results.append(row)
-            st.session_state.history.append(row)
-
-    if current_results:
-        st.table(pd.DataFrame(current_results))
+        total_odds = round(odds_a * odds_b, 2)
+        st.success(f"🔥 自動計算二串一總賠率：{total_odds}")
+        st.info("💡 提示：如果辨識不準，請確保截圖清晰且背景單純。")
+    else:
+        st.warning("無法從圖片中辨識出足夠的賠率數字，請手動輸入或重新截圖。")
+        # 備用手動輸入
+        odds_a = st.number_input("手動輸入賠率 A", value=1.75)
+        odds_b = st.number_input("手動輸入賠率 B", value=1.75)
+        st.write(f"計算結果：{round(odds_a * odds_b, 2)}")
