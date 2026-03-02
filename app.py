@@ -1,86 +1,54 @@
 import streamlit as st
-from PIL import Image, ImageOps, ImageEnhance
+from PIL import Image, ImageOps
 import pytesseract
 import pandas as pd
 import re
-from datetime import datetime
 
-st.set_page_config(page_title="第一節運彩助手", layout="wide")
+st.set_page_config(page_title="運彩截圖秒轉表格", layout="wide")
 
-# 初始化歷史紀錄與辨識快取
-if 'lottery_history' not in st.session_state:
-    st.session_state.lottery_history = []
-if 'ocr_cache' not in st.session_state:
-    st.session_state.ocr_cache = {"第一節大小": {"val": "", "odds": ""}, "第一節讓分": {"val": "", "odds": ""}}
+st.title("⚡ 運彩截圖 -> 自動生成表格")
+st.write("上傳截圖，我會直接把所有數字抓出來排成表！")
 
-st.title("📋 第一節數據連動表格")
-st.write("上傳截圖後，切換項目時「分盤」與「賠率」會自動跟著跳轉。")
-
-uploaded_file = st.file_uploader("📸 上傳第一節截圖", type=["jpg", "png", "jpeg"])
+uploaded_file = st.file_uploader("📸 選擇截圖", type=["jpg", "png", "jpeg"])
 
 if uploaded_file:
     img = Image.open(uploaded_file)
     st.image(img, caption="原始截圖", use_container_width=True)
     
-    with st.spinner('正在深度掃描所有第一節數據...'):
-        # 圖片強化處理
-        gray = ImageOps.grayscale(img)
-        gray = ImageEnhance.Contrast(gray).enhance(2.0)
-        text = pytesseract.image_to_string(gray, lang='chi_tra+eng', config='--psm 6')
+    with st.spinner('正在瘋狂掃描所有數字...'):
+        # 1. 強化辨識：轉灰階 + 增加對比
+        img_gray = ImageOps.grayscale(img)
         
-        # 重置快取
-        st.session_state.ocr_cache = {"第一節大小": {"val": "", "odds": ""}, "第一節讓分": {"val": "", "odds": ""}}
+        # 2. 辨識所有數字與點
+        custom_config = r'--oem 3 --psm 11 -c tessedit_char_whitelist=0123456789.-'
+        raw_text = pytesseract.image_to_string(img_gray, config=custom_config)
         
-        lines = text.split('\n')
-        for line in lines:
-            if "1" in line or "一" in line:
-                v_match = re.search(r'[-+]?\d+\.\d', line)
-                o_match = re.search(r'[1-2]\.\d{2}', line)
-                
-                if "大小" in line and v_match and o_match:
-                    st.session_state.ocr_cache["第一節大小"] = {"val": v_match.group(), "odds": o_match.group()}
-                elif "讓" in line and v_match and o_match:
-                    st.session_state.ocr_cache["第一節讓分"] = {"val": v_match.group(), "odds": o_match.group()}
+        # 3. 抓取所有 1.xx 到 2.xx 的數字 (賠率)
+        odds = re.findall(r'[1-2]\.\d{2}', raw_text)
+        # 抓取所有可能的分盤數字 (例如 54.5, 3.5)
+        lines = re.findall(r'\d{1,3}\.\d', raw_text)
+        
+        # 4. 合併成一個清單
+        all_data = sorted(list(set(odds + lines)))
 
-# --- 數據確認與聯動區 ---
-st.subheader("📝 數據確認 (切換項目會自動帶入對應數字)")
-c1, c2, c3, c4 = st.columns(4)
-
-current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-f_date = c1.text_input("日期", value=current_time)
-
-# 1. 項目切換
-f_type = c2.selectbox("項目", ["第一節大小", "第一節讓分"])
-
-# 2. 根據項目自動取得快取中的數字
-default_val = st.session_state.ocr_cache[f_type]["val"]
-default_odds = st.session_state.ocr_cache[f_type]["odds"]
-
-# 3. 顯示輸入框 (使用者仍可手動微調)
-f_val = c3.text_input("分盤數字", value=default_val, key=f"val_{f_type}")
-f_odds = c4.text_input("賠率", value=default_odds, key=f"odds_{f_type}")
-
-if st.button("➕ 加入歷史紀錄表格"):
-    if f_val and f_odds:
-        st.session_state.lottery_history.append({
-            "日期": f_date, "項目": f_type, "分盤": f_val, "賠率": f_odds
+    if all_data:
+        st.success(f"✅ 自動抓到 {len(all_data)} 組數據！")
+        
+        # 5. 直接生成表格
+        df = pd.DataFrame({
+            "序號": range(1, len(all_data) + 1),
+            "辨識出的數據": all_data,
+            "用途說明": ["可能是賠率或分盤" for _ in all_data]
         })
-        st.success(f"已加入 {f_type} 紀錄！")
-        st.rerun()
+        
+        st.subheader("📊 自動整理結果")
+        st.table(df) # 直接噴出表格
+        
+        # 下載按鈕
+        csv = df.to_csv(index=False).encode('utf-8-sig')
+        st.download_button("📥 下載這份表格", csv, "lottery_data.csv", "text/csv")
     else:
-        st.error("該項目未偵測到數字，請手動輸入後再加入。")
+        st.error("❌ 真的抓不到數字... 請確認截圖是否太模糊。")
+        st.write("電腦看到的原始文字：", raw_text)
 
-# --- 歷史紀錄總表 ---
-st.divider()
-st.subheader("📜 歷史紀錄表格 (總表)")
-
-if st.session_state.lottery_history:
-    df_history = pd.DataFrame(st.session_state.lottery_history)
-    st.table(df_history)
-    
-    csv = df_history.to_csv(index=False).encode('utf-8-sig')
-    st.download_button("📥 下載完整紀錄 (CSV)", csv, "history.csv", "text/csv")
-    
-    if st.button("🗑️ 清空紀錄"):
-        st.session_state.lottery_history = []
-        st.rerun()
+st.info("💡 為什麼之前沒顯示？因為之前的程式在找『精準的賠率』，結果把你的 54.5 給擋掉了。現在我通通都抓！")
