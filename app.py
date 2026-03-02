@@ -1,54 +1,29 @@
 import streamlit as st
-from PIL import Image, ImageOps
-import pytesseract
 import pandas as pd
-import re
+from datetime import datetime
 
-st.set_page_config(page_title="運彩截圖秒轉表格", layout="wide")
+# 設定網頁標題與佈局
+st.set_page_config(page_title="運彩紀錄工具", layout="wide")
 
-st.title("⚡ 運彩截圖 -> 自動生成表格")
-st.write("上傳截圖，我會直接把所有數字抓出來排成表！")
+st.title("📋 運彩投注歷史紀錄表")
+st.write("手動輸入賠率資訊，系統會自動幫你整理成歷史表格。")
 
-uploaded_file = st.file_uploader("📸 選擇截圖", type=["jpg", "png", "jpeg"])
+# --- 核心功能：初始化儲存空間 ---
+# 使用 session_state 確保在同一次使用中，資料可以持續累計
+if 'history_data' not in st.session_state:
+    st.session_state.history_data = []
 
-if uploaded_file:
-    img = Image.open(uploaded_file)
-    st.image(img, caption="原始截圖", use_container_width=True)
+# --- 第一部分：資料輸入區 ---
+with st.expander("➕ 新增一筆紀錄", expanded=True):
+    # 自動抓取現在的時間
+    current_dt = datetime.now().strftime("%Y-%m-%d %H:%M")
     
-    with st.spinner('正在瘋狂掃描所有數字...'):
-        # 1. 強化辨識：轉灰階 + 增加對比
-        img_gray = ImageOps.grayscale(img)
-        
-        # 2. 辨識所有數字與點
-        custom_config = r'--oem 3 --psm 11 -c tessedit_char_whitelist=0123456789.-'
-        raw_text = pytesseract.image_to_string(img_gray, config=custom_config)
-        
-        # 3. 抓取所有 1.xx 到 2.xx 的數字 (賠率)
-        odds = re.findall(r'[1-2]\.\d{2}', raw_text)
-        # 抓取所有可能的分盤數字 (例如 54.5, 3.5)
-        lines = re.findall(r'\d{1,3}\.\d', raw_text)
-        
-        # 4. 合併成一個清單
-        all_data = sorted(list(set(odds + lines)))
-
-    if all_data:
-        st.success(f"✅ 自動抓到 {len(all_data)} 組數據！")
-        
-        # 5. 直接生成表格
-        df = pd.DataFrame({
-            "序號": range(1, len(all_data) + 1),
-            "辨識出的數據": all_data,
-            "用途說明": ["可能是賠率或分盤" for _ in all_data]
-        })
-        
-        st.subheader("📊 自動整理結果")
-        st.table(df) # 直接噴出表格
-        
-        # 下載按鈕
-        csv = df.to_csv(index=False).encode('utf-8-sig')
-        st.download_button("📥 下載這份表格", csv, "lottery_data.csv", "text/csv")
-    else:
-        st.error("❌ 真的抓不到數字... 請確認截圖是否太模糊。")
-        st.write("電腦看到的原始文字：", raw_text)
-
-st.info("💡 為什麼之前沒顯示？因為之前的程式在找『精準的賠率』，結果把你的 54.5 給擋掉了。現在我通通都抓！")
+    col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
+    
+    with col1:
+        date_input = st.text_input("日期時間", value=current_dt)
+    with col2:
+        item_input = st.text_input("項目 (例如：第一節大小)", placeholder="請輸入項目")
+    with col3:
+        line_input = st.text_input("分盤/讓分", placeholder="54.5")
+    with col
