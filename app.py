@@ -6,113 +6,106 @@ import re
 import pandas as pd
 from datetime import datetime
 
-# 設定網頁
-st.set_page_config(page_title="運彩辨識紀錄系統", layout="wide")
+st.set_page_config(page_title="運彩精準辨識版", layout="wide")
 
-# 設定日期與星期
+# 日期與星期
 now = datetime.now()
 week_list = ["一", "二", "三", "四", "五", "六", "日"]
-date_str = now.strftime("%Y-%m-%d")
-day_of_week = week_list[now.weekday()]
-full_date_display = f"{date_str} (週{day_of_week})"
+full_date = f"{now.strftime('%Y-%m-%d')} (週{week_list[now.weekday()]})"
+st.title(f"📊 運彩精準辨識系統 - {full_date}")
 
-st.title(f"📊 運彩辨識系統 - {full_date_display}")
-
-# 初始化紀錄儲存器
 if 'history' not in st.session_state:
     st.session_state.history = []
 
 @st.cache_resource
 def load_reader():
-    try:
-        return easyocr.Reader(['en'], gpu=False)
-    except Exception as e:
-        st.error(f"AI 引擎啟動失敗: {e}")
-        return None
+    # 這裡必須載入 ch_tra (繁體中文) 來辨識「大、小、讓」
+    return easyocr.Reader(['ch_tra', 'en'], gpu=False)
 
 reader = load_reader()
 
-# 側邊欄：歷史紀錄
+def get_clean_num(text):
+    """只提取數字、小數點及正負號"""
+    res = re.sub(r'[^0-9.+-]', '', text)
+    try:
+        return float(res) if res else None
+    except:
+        return None
+
+# 側邊欄紀錄
 with st.sidebar:
-    st.header("📜 歷史紀錄回看")
+    st.header("📜 歷史紀錄")
     if st.session_state.history:
-        if st.button("清空所有紀錄"):
+        if st.button("清空紀錄"):
             st.session_state.history = []
             st.rerun()
-        df_hist = pd.DataFrame(st.session_state.history)
-        st.dataframe(df_hist, use_container_width=True, hide_index=True)
-    else:
-        st.write("目前尚無紀錄")
+        st.dataframe(pd.DataFrame(st.session_state.history), hide_index=True)
 
-# 主頁面上傳
-uploaded_files = st.file_uploader("📸 上傳運彩截圖 (可多張)", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📸 上傳截圖", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
 
 if uploaded_files and reader:
-    st.subheader("📍 本次辨識結果")
-    
-    table_data = []
+    st.subheader("📍 辨識結果表格")
+    current_batch = []
 
     for i, file in enumerate(uploaded_files):
         img = Image.open(file)
-        img.thumbnail((1000, 1000))
         img_np = np.array(img)
         
-        with st.spinner(f'正在分析圖 {i+1}...'):
+        with st.spinner(f'深度掃描圖 {i+1}...'):
+            # 取得原始結果 (包含文字與位置)
             results = reader.readtext(img_np)
-            width, height = img.size
             
-            # 建立資料存放區
-            # 邏輯：利用 x 座標區分左右，y 座標區分上下
-            left_nums = []  # 大小分區域 (通常在左)
-            right_nums = [] # 讓分區域 (通常在右)
+            # 初始化該圖資料
+            data = {"大小門檻": "-", "大小賠率": "-", "讓分門檻": "-", "讓分賠率": "-"}
             
+            # 第一輪：找出所有帶有數字的區塊及其中心座標
+            nums = []
             for (bbox, text, prob) in results:
-                clean = re.sub(r'[^0-9.+-]', '', text)
-                if clean and "." in clean:
-                    x_center = (bbox[0][0] + bbox[1][0]) / 2
-                    y_center = (bbox[0][1] + bbox[2][1]) / 2
-                    
-                    # 以圖片中心線區分左右
-                    if x_center < width / 2:
-                        left_nums.append({'val': clean, 'y': y_center})
-                    else:
-                        right_nums.append({'val': clean, 'y': y_center})
+                val = get_clean_num(text)
+                if val is not None:
+                    y_mid = (bbox[0][1] + bbox[2][1]) / 2
+                    x_mid = (bbox[0][0] + bbox[1][0]) / 2
+                    nums.append({"val": val, "x": x_mid, "y": y_mid, "text": text})
 
-            # 依垂直位置排序
-            left_nums.sort(key=lambda x: x['y'])
-            right_nums.sort(key=lambda x: x['y'])
+            # 第二輪：根據關鍵字定位
+            for (bbox, text, prob) in results:
+                y_key = (bbox[0][1] + bbox[2][1]) / 2
+                x_key = (bbox[0][0] + bbox[1][0]) / 2
+                
+                # 尋找「大」或「小」附近的數字
+                if "大" in text or "小" in text:
+                    # 找同一行(y相近)且在右邊最靠近的兩個數字
+                    row_nums = [n for n in nums if abs(n['y'] - y_key) < 30 and n['x'] > x_key]
+                    row_nums.sort(key=lambda x: x['x'])
+                    if len(row_nums) >= 1: data["大小門檻"] = row_nums[0]['val']
+                    if len(row_nums) >= 2: data["大小賠率"] = row_nums[1]['val']
+                
+                # 尋找「讓」附近的數字
+                if "讓" in text:
+                    row_nums = [n for n in nums if abs(n['y'] - y_key) < 30 and n['x'] > x_key]
+                    row_nums.sort(key=lambda x: x['x'])
+                    if len(row_nums) >= 1: data["讓分門檻"] = row_nums[0]['val']
+                    if len(row_nums) >= 2: data["讓分賠率"] = row_nums[1]['val']
 
-            # 提取數值
-            # 大小分：通常第一個是門檻(如 52.5)，第二個是賠率(如 1.75)
-            sz_limit = left_nums[0]['val'] if len(left_nums) > 0 else "-"
-            sz_odds = left_nums[1]['val'] if len(left_nums) > 1 else "-"
-            
-            # 讓分：通常第一個是門檻(如 -3.5)，第二個是賠率(如 1.85)
-            sp_limit = right_nums[0]['val'] if len(right_nums) > 0 else "-"
-            sp_odds = right_nums[1]['val'] if len(right_nums) > 1 else "-"
-
-            # 整理成一列
             row = {
-                "日期星期": full_date_display,
+                "時間": now.strftime("%H:%M"),
+                "週別": f"週{day_of_week}",
                 "編號": f"圖{i+1}",
-                "大小分-門檻": sz_limit,
-                "大小分-賠率": sz_odds,
-                "讓分-門檻": sp_limit,
-                "讓分-賠率": sp_odds
+                "大小-盤口": data["大小門檻"],
+                "大小-賠率": data["大小賠率"],
+                "讓分-盤口": data["讓分門檻"],
+                "讓分-賠率": data["讓分賠率"]
             }
-            table_data.append(row)
+            current_batch.append(row)
             st.session_state.history.append(row)
 
-    # 顯示總表
-    if table_data:
-        final_df = pd.DataFrame(table_data)
-        st.table(final_df) # 使用美觀的表格顯示
-        
-        # 下方顯示預覽圖對照
+    if current_batch:
+        st.table(pd.DataFrame(current_batch))
         st.divider()
-        st.write("🖼️ 圖片對照預覽：")
+        st.write("🖼️ 辨識對照圖：")
         cols = st.columns(len(uploaded_files))
         for idx, file in enumerate(uploaded_files):
             cols[idx].image(file, caption=f"圖 {idx+1}", use_container_width=True)
 
-    st.success("✅ 辨識完畢！資料已同步至左側紀錄。")
+else:
+    st.info("💡 請上傳清晰的截圖，我會自動尋找「大/小」與「讓分」欄位旁的數字。")
